@@ -5,20 +5,21 @@ from io import BytesIO
 # === Configuration de la page ===
 st.set_page_config(page_title="Générateur d'écritures de vente", page_icon="📘", layout="centered")
 st.title("📘 Générateur d'écritures comptables de ventes")
-st.write("Charge ton fichier Excel contenant les ventes (avec les colonnes C à J selon ton modèle).")
+st.write("Charge ton fichier Excel contenant les ventes (sans en-têtes, colonnes C à J selon ton modèle).")
 
 # === Upload du fichier ===
 uploaded_file = st.file_uploader("📂 Sélectionne ton fichier Excel", type=["xls", "xlsx"])
 
 if uploaded_file:
-    df = pd.read_excel(uploaded_file)
+    # Lecture sans en-tête
+    df = pd.read_excel(uploaded_file, header=None)
 
-    # === Lecture et renommage des colonnes ===
     try:
-        df = df[['C', 'D', 'E', 'I', 'J']]
+        # Colonnes selon ton modèle
+        df = df.iloc[:, [2, 3, 4, 8, 9]]
         df.columns = ['Date', 'Facture', 'Client', 'TTC', 'HT']
-    except KeyError:
-        st.error("❌ Les colonnes C, D, E, I et J n'ont pas été trouvées dans le fichier.")
+    except Exception as e:
+        st.error(f"❌ Problème de structure du fichier : {e}")
         st.stop()
 
     def taux_tva(ht, ttc):
@@ -55,15 +56,20 @@ if uploaded_file:
     desequilibres = []
 
     for _, row in df.iterrows():
-        ht = float(row['HT'])
-        ttc = float(row['TTC'])
-        tva = round(ttc - ht, 2)
+        try:
+            ht = float(row['HT'])
+            ttc = float(row['TTC'])
+        except ValueError:
+            continue  # Ignore lignes vides / erronées
+
+        tva = round(ttc - ht, 2)  # ✅ calcul direct
         taux = taux_tva(ht, ttc)
         compte_vte = compte_vente(taux)
         compte_cli = compte_client(row['Client'])
         libelle = f"Facture {row['Facture']} - {row['Client']}"
         date = row['Date']
 
+        # Ligne client (débit TTC)
         ecritures.append({
             'Date': date,
             'Journal': 'VT',
@@ -72,6 +78,7 @@ if uploaded_file:
             'Débit': round(ttc, 2),
             'Crédit': ''
         })
+        # Ligne vente (crédit HT)
         ecritures.append({
             'Date': date,
             'Journal': 'VT',
@@ -80,6 +87,7 @@ if uploaded_file:
             'Débit': '',
             'Crédit': round(ht, 2)
         })
+        # Ligne TVA (crédit TVA sur encaissements)
         if tva > 0:
             ecritures.append({
                 'Date': date,
@@ -98,12 +106,12 @@ if uploaded_file:
 
     df_out = pd.DataFrame(ecritures, columns=['Date', 'Journal', 'Numéro de compte', 'Libellé', 'Débit', 'Crédit'])
 
-    # === Affichage d’un résumé ===
+    # === Résumé ===
     st.success(f"✅ {len(df['Facture'])} factures traitées – {len(df_out)} lignes générées.")
     if desequilibres:
         st.warning(f"⚠️ {len(desequilibres)} écritures déséquilibrées : {', '.join(desequilibres[:5])}")
 
-    # === Export Excel en mémoire ===
+    # === Export Excel ===
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_out.to_excel(writer, index=False)
