@@ -3,7 +3,7 @@ import pandas as pd
 from io import BytesIO
 
 # ============================================================
-# 🔐 AUTHENTIFICATION (ta version)
+# 🔐 AUTHENTIFICATION
 # ============================================================
 
 if "login" not in st.session_state:
@@ -55,14 +55,13 @@ if uploaded_file:
     df = pd.read_excel(uploaded_file, header=None, dtype=str)
 
     try:
-        # Colonnes utiles : C, D, E, I, J
         df = df.iloc[:, [2, 3, 4, 8, 9]]
         df.columns = ["Date", "Facture", "Client", "HT", "TTC"]
     except Exception:
         st.error("❌ Fichier non conforme : il doit contenir au moins 10 colonnes.")
         st.stop()
 
-    # Nettoyage montants
+    # === Nettoyage montants ===
     def clean_amount(x):
         if pd.isna(x):
             return 0.0
@@ -75,7 +74,7 @@ if uploaded_file:
     df["HT"] = df["HT"].apply(clean_amount)
     df["TTC"] = df["TTC"].apply(clean_amount)
 
-    # Nettoyage dates
+    # === Nettoyage dates ===
     df["Date"] = (
         pd.to_datetime(df["Date"], errors="coerce")
         .dt.strftime("%d/%m/%Y")
@@ -130,68 +129,57 @@ if uploaded_file:
         taux = taux_tva(ht, ttc)
         compte_vte = compte_vente(taux)
         compte_cli = compte_client(row["Client"])
+        libelle = f"{row['Client']}"
         date = row["Date"]
-        facture = str(row["Facture"]).strip()
-        client = str(row["Client"]).strip()
-
-        # ✅ Libellé = nom client seulement
-        libelle = client
+        piece = row["Facture"]
 
         # Ligne client (TTC au débit)
         ecritures.append({
-            "Date": date,
-            "Journal": "VT",
-            "Numéro de pièce": facture,  # ✅ Numéro de pièce = facture
+            "Date": date, "Journal": "VT",
             "Numéro de compte": compte_cli,
+            "Numéro de pièce": piece,
             "Libellé": libelle,
-            "Débit": round(ttc, 2),
-            "Crédit": ""
+            "Débit": round(ttc, 2), "Crédit": ""
         })
 
         # Ligne vente (HT au crédit)
         ecritures.append({
-            "Date": date,
-            "Journal": "VT",
-            "Numéro de pièce": facture,
+            "Date": date, "Journal": "VT",
             "Numéro de compte": compte_vte,
+            "Numéro de pièce": piece,
             "Libellé": libelle,
-            "Débit": "",
-            "Crédit": round(ht, 2)
+            "Débit": "", "Crédit": round(ht, 2)
         })
 
         # Ligne TVA (si présente)
         if abs(tva) > 0.01:
             ecritures.append({
-                "Date": date,
-                "Journal": "VT",
-                "Numéro de pièce": facture,
+                "Date": date, "Journal": "VT",
                 "Numéro de compte": "445740000",
+                "Numéro de pièce": piece,
                 "Libellé": libelle,
-                "Débit": "",
-                "Crédit": round(tva, 2)
+                "Débit": "", "Crédit": round(tva, 2)
             })
 
-        # Vérification équilibre
+        # Vérif équilibre
         if abs(round(ttc - (ht + tva), 2)) > 0.01:
             desequilibres.append(row["Facture"])
 
-    df_out = pd.DataFrame(ecritures, columns=["Date", "Journal", "Numéro de pièce", "Numéro de compte", "Libellé", "Débit", "Crédit"])
+    # ✅ Ordre des colonnes : Numéro de compte avant Numéro de pièce
+    df_out = pd.DataFrame(ecritures, columns=["Date", "Journal", "Numéro de compte", "Numéro de pièce", "Libellé", "Débit", "Crédit"])
 
     # === Résumé ===
     st.success(f"✅ {len(df)} lignes sources → {len(df_out)} écritures générées.")
     if desequilibres:
         st.warning(f"⚠️ {len(desequilibres)} factures déséquilibrées : {', '.join(map(str, desequilibres[:5]))}")
 
-    # === Aperçu ===
     st.subheader("Aperçu des premières écritures")
     st.dataframe(df_out.head(10))
 
-    # === Totaux de contrôle ===
     total_debit = df_out["Débit"].apply(pd.to_numeric, errors="coerce").sum()
     total_credit = df_out["Crédit"].apply(pd.to_numeric, errors="coerce").sum()
     st.info(f"**Total Débit :** {total_debit:,.2f} € | **Total Crédit :** {total_credit:,.2f} € | **Écart :** {total_debit - total_credit:,.2f} €")
 
-    # === Export Excel ===
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl", date_format="DD/MM/YYYY") as writer:
         df_out.to_excel(writer, index=False, sheet_name="Écritures")
