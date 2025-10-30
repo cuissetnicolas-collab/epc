@@ -2,26 +2,39 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-# === Configuration de la page ===
+# === Configuration ===
 st.set_page_config(page_title="Générateur d'écritures de vente", page_icon="📘", layout="centered")
 st.title("📘 Générateur d'écritures comptables de ventes")
-st.write("Charge ton fichier Excel contenant les ventes (sans en-têtes, colonnes C à J selon ton modèle).")
+st.write("Charge ton fichier Excel sans en-têtes, avec les colonnes C à J selon ton modèle.")
 
-# === Upload du fichier ===
+# === Upload ===
 uploaded_file = st.file_uploader("📂 Sélectionne ton fichier Excel", type=["xls", "xlsx"])
 
 if uploaded_file:
     # Lecture sans en-tête
-    df = pd.read_excel(uploaded_file, header=None)
+    df = pd.read_excel(uploaded_file, header=None, dtype=str)
 
     try:
-        # Colonnes selon ton modèle
+        # Colonnes utiles : C (2), D (3), E (4), I (8), J (9)
         df = df.iloc[:, [2, 3, 4, 8, 9]]
         df.columns = ['Date', 'Facture', 'Client', 'TTC', 'HT']
     except Exception as e:
-        st.error(f"❌ Problème de structure du fichier : {e}")
+        st.error(f"❌ Structure du fichier incorrecte : {e}")
         st.stop()
 
+    # Conversion des nombres
+    for col in ['TTC', 'HT']:
+        df[col] = (
+            df[col]
+            .replace(",", ".", regex=True)
+            .replace(r"[^\d\.\-]", "", regex=True)
+            .astype(float, errors="ignore")
+        )
+
+    # Conversion des dates
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%d/%m/%Y')
+
+    # === Fonctions utiles ===
     def taux_tva(ht, ttc):
         if ht == 0:
             return 0
@@ -59,17 +72,20 @@ if uploaded_file:
         try:
             ht = float(row['HT'])
             ttc = float(row['TTC'])
-        except ValueError:
-            continue  # Ignore lignes vides / erronées
+        except:
+            continue  # ignore lignes vides
 
-        tva = round(ttc - ht, 2)  # ✅ calcul direct
+        if pd.isna(ht) or pd.isna(ttc) or (ht == 0 and ttc == 0):
+            continue
+
+        tva = round(ttc - ht, 2)
         taux = taux_tva(ht, ttc)
         compte_vte = compte_vente(taux)
         compte_cli = compte_client(row['Client'])
         libelle = f"Facture {row['Facture']} - {row['Client']}"
         date = row['Date']
 
-        # Ligne client (débit TTC)
+        # Client (Débit TTC)
         ecritures.append({
             'Date': date,
             'Journal': 'VT',
@@ -78,7 +94,7 @@ if uploaded_file:
             'Débit': round(ttc, 2),
             'Crédit': ''
         })
-        # Ligne vente (crédit HT)
+        # Vente (Crédit HT)
         ecritures.append({
             'Date': date,
             'Journal': 'VT',
@@ -87,8 +103,8 @@ if uploaded_file:
             'Débit': '',
             'Crédit': round(ht, 2)
         })
-        # Ligne TVA (crédit TVA sur encaissements)
-        if tva > 0:
+        # TVA (Crédit TVA sur encaissements)
+        if abs(tva) > 0.01:
             ecritures.append({
                 'Date': date,
                 'Journal': 'VT',
@@ -107,7 +123,8 @@ if uploaded_file:
     df_out = pd.DataFrame(ecritures, columns=['Date', 'Journal', 'Numéro de compte', 'Libellé', 'Débit', 'Crédit'])
 
     # === Résumé ===
-    st.success(f"✅ {len(df['Facture'])} factures traitées – {len(df_out)} lignes générées.")
+    nb_factures = df['Facture'].nunique()
+    st.success(f"✅ {nb_factures} factures traitées – {len(df_out)} lignes générées.")
     if desequilibres:
         st.warning(f"⚠️ {len(desequilibres)} écritures déséquilibrées : {', '.join(desequilibres[:5])}")
 
