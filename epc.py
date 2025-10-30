@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
-from io import BytesIO
+import io
 
-# ============================================================
+# =====================
 # 🔐 AUTHENTIFICATION
-# ============================================================
+# =====================
 
 if "login" not in st.session_state:
     st.session_state["login"] = False
@@ -35,84 +35,68 @@ if not st.session_state["login"]:
         login(username_input, password_input)
     st.stop()
 
-# ============================================================
-# 🎯 PAGE PRINCIPALE - Générateur d'écritures de ventes
-# ============================================================
+# =====================
+# ⚙️ FONCTIONS UTILES
+# =====================
 
-st.set_page_config(page_title="Générateur écritures ventes", page_icon="📘", layout="centered")
-st.title("📘 Générateur d'écritures comptables de ventes")
-st.caption(f"Connecté en tant que **{st.session_state['name']}**")
+def taux_tva(ht, ttc):
+    if ht == 0:
+        return 0
+    taux = round((ttc / ht - 1) * 100, 1)
+    if 5 <= taux <= 6:
+        return 5.5
+    elif 9 <= taux <= 11:
+        return 10
+    elif 19 <= taux <= 21:
+        return 20
+    else:
+        return 0
 
-if st.button("🔓 Déconnexion"):
-    st.session_state["login"] = False
-    st.rerun()
+def compte_vente(taux):
+    if taux == 5.5:
+        return "704000000"
+    elif taux == 10:
+        return "704100000"
+    elif taux == 20:
+        return "704200000"
+    else:
+        return "704500000"
 
-st.write("Charge un fichier Excel **sans en-tête** contenant les colonnes C à J.")
+def compte_client(nom):
+    # simplification : 4110 + 1ère lettre du client
+    lettre = nom.strip().upper()[:1]
+    return f"4110{lettre}0000"
 
-uploaded_file = st.file_uploader("📂 Fichier Excel", type=["xls", "xlsx"])
+# =====================
+# 🧾 INTERFACE PRINCIPALE
+# =====================
+
+st.title("📘 Génération d'écritures comptables ventes")
+uploaded_file = st.file_uploader("📤 Importer le fichier Excel (sans en-têtes)", type=["xlsx"])
 
 if uploaded_file:
-    df = pd.read_excel(uploaded_file, header=None, dtype=str)
+    df = pd.read_excel(uploaded_file, header=None)
 
-    try:
-        df = df.iloc[:, [2, 3, 4, 8, 9]]
-        df.columns = ["Date", "Facture", "Client", "HT", "TTC"]
-    except Exception:
-        st.error("❌ Fichier non conforme : il doit contenir au moins 10 colonnes.")
+    # Vérification minimale du format
+    if df.shape[1] < 10:
+        st.error("⚠️ Le fichier doit contenir au moins 10 colonnes.")
         st.stop()
 
-    # === Nettoyage montants ===
-    def clean_amount(x):
-        if pd.isna(x):
-            return 0.0
-        x = str(x).replace(",", ".").replace("€", "").replace(" ", "").strip()
-        try:
-            return float(x)
-        except ValueError:
-            return 0.0
+    # Attribution des colonnes utiles
+    df = df.rename(columns={
+        2: "Date",
+        3: "Facture",
+        4: "Client",
+        8: "HT",
+        9: "TTC"
+    })
 
-    df["HT"] = df["HT"].apply(clean_amount)
-    df["TTC"] = df["TTC"].apply(clean_amount)
+    # Nettoyage des dates
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.strftime("%d/%m/%Y")
 
-    # === Nettoyage dates ===
-    df["Date"] = (
-        pd.to_datetime(df["Date"], errors="coerce")
-        .dt.strftime("%d/%m/%Y")
-        .fillna("")
-    )
+    # Suppression des lignes vides
+    df = df.dropna(subset=["Facture", "Client", "HT", "TTC"])
 
-    # === Fonctions utilitaires ===
-    def compte_client(nom):
-        nom = str(nom).strip().upper()
-        lettre = nom[0] if nom and nom[0].isalpha() else "X"
-        return f"4110{lettre}0000"
-
-    def taux_tva(ht, ttc):
-        if ht == 0:
-            return 0
-        taux_calc = round((ttc / ht - 1) * 100, 1)
-        if abs(taux_calc - 20) < 0.6:
-            return 20
-        elif abs(taux_calc - 10) < 0.6:
-            return 10
-        elif abs(taux_calc - 5.5) < 0.4:
-            return 5.5
-        elif abs(ttc - ht) < 0.02:
-            return 0
-        else:
-            return "multi"
-
-    def compte_vente(taux):
-        comptes = {
-            5.5: "704000000",
-            10: "704100000",
-            20: "704200000",
-            0: "704500000",
-            "multi": "704300000"
-        }
-        return comptes[taux]
-
-    # === Génération des écritures ===
     ecritures = []
     desequilibres = []
 
@@ -122,75 +106,71 @@ if uploaded_file:
             continue
 
         tva = round(ttc - ht, 2)
-        if tva < 0:
-            ht, ttc = ttc, ht
-            tva = round(ttc - ht, 2)
-
         taux = taux_tva(ht, ttc)
         compte_vte = compte_vente(taux)
         compte_cli = compte_client(row["Client"])
-        libelle = f"{row['Client']}"
+        libelle = row["Client"]
         date = row["Date"]
         piece = row["Facture"]
 
-        # Ligne client (TTC au débit)
-        ecritures.append({
-            "Date": date, "Journal": "VT",
-            "Numéro de compte": compte_cli,
-            "Numéro de pièce": piece,
-            "Libellé": libelle,
-            "Débit": round(ttc, 2), "Crédit": ""
-        })
+        abs_ht, abs_tva, abs_ttc = abs(ht), abs(tva), abs(ttc)
 
-        # Ligne vente (HT au crédit)
-        ecritures.append({
-            "Date": date, "Journal": "VT",
-            "Numéro de compte": compte_vte,
-            "Numéro de pièce": piece,
-            "Libellé": libelle,
-            "Débit": "", "Crédit": round(ht, 2)
-        })
-
-        # Ligne TVA (si présente)
-        if abs(tva) > 0.01:
+        if ttc >= 0:
+            # ✅ Facture normale
             ecritures.append({
                 "Date": date, "Journal": "VT",
-                "Numéro de compte": "445740000",
-                "Numéro de pièce": piece,
-                "Libellé": libelle,
-                "Débit": "", "Crédit": round(tva, 2)
+                "Numéro de compte": compte_cli, "Numéro de pièce": piece,
+                "Libellé": libelle, "Débit": abs_ttc, "Crédit": ""
             })
+            ecritures.append({
+                "Date": date, "Journal": "VT",
+                "Numéro de compte": compte_vte, "Numéro de pièce": piece,
+                "Libellé": libelle, "Débit": "", "Crédit": abs_ht
+            })
+            if abs_tva > 0.01:
+                ecritures.append({
+                    "Date": date, "Journal": "VT",
+                    "Numéro de compte": "445740000", "Numéro de pièce": piece,
+                    "Libellé": libelle, "Débit": "", "Crédit": abs_tva
+                })
+        else:
+            # ✅ Avoir
+            ecritures.append({
+                "Date": date, "Journal": "VT",
+                "Numéro de compte": compte_cli, "Numéro de pièce": piece,
+                "Libellé": libelle, "Débit": "", "Crédit": abs_ttc
+            })
+            ecritures.append({
+                "Date": date, "Journal": "VT",
+                "Numéro de compte": compte_vte, "Numéro de pièce": piece,
+                "Libellé": libelle, "Débit": abs_ht, "Crédit": ""
+            })
+            if abs_tva > 0.01:
+                ecritures.append({
+                    "Date": date, "Journal": "VT",
+                    "Numéro de compte": "445740000", "Numéro de pièce": piece,
+                    "Libellé": libelle, "Débit": abs_tva, "Crédit": ""
+                })
 
-        # Vérif équilibre
-        if abs(round(ttc - (ht + tva), 2)) > 0.01:
+        if round(abs_ttc - (abs_ht + abs_tva), 2) != 0:
             desequilibres.append(row["Facture"])
 
-    # ✅ Ordre des colonnes : Numéro de compte avant Numéro de pièce
-    df_out = pd.DataFrame(ecritures, columns=["Date", "Journal", "Numéro de compte", "Numéro de pièce", "Libellé", "Débit", "Crédit"])
+    df_ecritures = pd.DataFrame(ecritures, columns=[
+        "Date", "Journal", "Numéro de compte", "Numéro de pièce", "Libellé", "Débit", "Crédit"
+    ])
 
-    # === Résumé ===
-    st.success(f"✅ {len(df)} lignes sources → {len(df_out)} écritures générées.")
+    st.success("✅ Écritures générées avec succès")
+    st.dataframe(df_ecritures.head(50), use_container_width=True)
+
     if desequilibres:
-        st.warning(f"⚠️ {len(desequilibres)} factures déséquilibrées : {', '.join(map(str, desequilibres[:5]))}")
+        st.warning(f"⚠️ {len(desequilibres)} écritures déséquilibrées : {set(desequilibres)}")
 
-    st.subheader("Aperçu des premières écritures")
-    st.dataframe(df_out.head(10))
-
-    total_debit = df_out["Débit"].apply(pd.to_numeric, errors="coerce").sum()
-    total_credit = df_out["Crédit"].apply(pd.to_numeric, errors="coerce").sum()
-    st.info(f"**Total Débit :** {total_debit:,.2f} € | **Total Crédit :** {total_credit:,.2f} € | **Écart :** {total_debit - total_credit:,.2f} €")
-
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl", date_format="DD/MM/YYYY") as writer:
-        df_out.to_excel(writer, index=False, sheet_name="Écritures")
-    output.seek(0)
-
+    # Export Excel
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df_ecritures.to_excel(writer, index=False, sheet_name="Ecritures")
     st.download_button(
-        "💾 Télécharger les écritures générées",
-        data=output,
-        file_name="ecritures_ventes.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "💾 Télécharger le fichier des écritures",
+        data=output.getvalue(),
+        file_name="ecritures_comptables.xlsx"
     )
-
-else:
-    st.info("⬆️ Charge ton fichier Excel pour commencer.")
