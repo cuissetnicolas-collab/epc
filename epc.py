@@ -32,83 +32,85 @@ if uploaded_file:
     df["HT"] = df["HT"].apply(clean_amount)
     df["TTC"] = df["TTC"].apply(clean_amount)
 
-    # Nettoyage des dates
+    # Nettoyage et formatage des dates
     df["Date"] = (
         pd.to_datetime(df["Date"], errors="coerce")
         .dt.strftime("%d/%m/%Y")
         .fillna("")
     )
 
-    # === Fonctions ===
+    # === Fonctions auxiliaires ===
     def compte_client(nom):
         nom = str(nom).strip().upper()
         lettre = nom[0] if nom and nom[0].isalpha() else "X"
         return f"4110{lettre}0000"
 
-    def taux_tva(ht, ttc):
+    def determiner_taux(ht, ttc):
+        """Retourne le taux de TVA (5.5, 10, 20, 0 ou 'multi')."""
         if ht == 0:
             return 0
-        taux_calc = round((ttc / ht - 1) * 100, 1)
-        if abs(taux_calc - 20) < 0.5:
-            return 20
-        elif abs(taux_calc - 10) < 0.5:
-            return 10
-        elif abs(taux_calc - 5.5) < 0.3:
+        taux_calcule = round((ttc / ht - 1) * 100, 1)
+        if 5 <= taux_calcule <= 6:
             return 5.5
-        elif abs(ttc - ht) < 0.01:
+        elif 9 <= taux_calcule <= 11:
+            return 10
+        elif 19 <= taux_calcule <= 21:
+            return 20
+        elif abs(ttc - ht) < 0.02:
             return 0
         else:
             return "multi"
 
     def compte_vente(taux):
-        comptes = {
+        mapping = {
             5.5: "704000000",
             10: "704100000",
             20: "704200000",
             0: "704500000",
             "multi": "704300000"
         }
-        return comptes[taux]
+        return mapping.get(taux, "704300000")
 
     # === Génération des écritures ===
     ecritures = []
     desequilibres = []
 
     for _, row in df.iterrows():
-        ht, ttc = row["HT"], row["TTC"]
+        ht, ttc = round(row["HT"], 2), round(row["TTC"], 2)
         if ht == 0 and ttc == 0:
             continue
 
         tva = round(ttc - ht, 2)
-        taux = taux_tva(ht, ttc)
-        compte_vte = compte_vente(taux)
-        compte_cli = compte_client(row["Client"])
+        taux = determiner_taux(ht, ttc)
+        cpt_vente = compte_vente(taux)
+        cpt_client = compte_client(row["Client"])
         libelle = f"Facture {row['Facture']} - {row['Client']}"
         date = row["Date"]
 
-        # Ligne client
+        # Ligne Client (Débit TTC)
         ecritures.append({
             "Date": date, "Journal": "VT",
-            "Numéro de compte": compte_cli, "Libellé": libelle,
-            "Débit": round(ttc, 2), "Crédit": ""
+            "Numéro de compte": cpt_client, "Libellé": libelle,
+            "Débit": ttc, "Crédit": ""
         })
-        # Ligne vente
+
+        # Ligne Vente (Crédit HT)
         ecritures.append({
             "Date": date, "Journal": "VT",
-            "Numéro de compte": compte_vte, "Libellé": libelle,
-            "Débit": "", "Crédit": round(ht, 2)
+            "Numéro de compte": cpt_vente, "Libellé": libelle,
+            "Débit": "", "Crédit": ht
         })
-        # Ligne TVA
+
+        # Ligne TVA (Crédit TVA, si différente de 0)
         if abs(tva) > 0.01:
             ecritures.append({
                 "Date": date, "Journal": "VT",
-                "Numéro de compte": "445740000",
-                "Libellé": libelle,
-                "Débit": "", "Crédit": round(tva, 2)
+                "Numéro de compte": "445740000", "Libellé": libelle,
+                "Débit": "", "Crédit": tva
             })
 
-        # Vérification équilibre
-        if abs(round(ttc - (ht + tva), 2)) > 0.01:
+        # Contrôle d'équilibre
+        if abs((ttc) - (ht + tva)) > 0.01:
             desequilibres.append(row["Facture"])
 
     df_out = pd.DataFrame(ecritures, columns=["Date", "Journal", "Numéro de compte", "Libellé", "Débit", "Crédit"])
@@ -116,7 +118,7 @@ if uploaded_file:
     # === Résumé ===
     st.success(f"✅ {len(df)} lignes source – {len(df_out)} écritures générées.")
     if desequilibres:
-        st.warning(f"⚠️ {len(desequilibres)} factures déséquilibrées : {', '.join(map(str, desequilibres[:5]))}")
+        st.warning(f"⚠️ {len(desequilibres)} factures déséquilibrées : {', '.join(map(str, desequilibres[:10]))}")
 
     # === Aperçu ===
     st.subheader("Aperçu des premières écritures")
