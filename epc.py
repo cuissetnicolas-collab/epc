@@ -12,7 +12,7 @@ if "login" not in st.session_state:
 def login(username, password):
     users = {
         "aurore": {"password": "12345", "name": "Aurore Demoulin"},
-        "laure.froidefond": {"password": "Laure Froidefond", "name": "Laure Froidefond"},
+        "laure.froidefond": {"password": "Laure2019$", "name": "Laure Froidefond"},
         "Bruno": {"password": "Toto1963$", "name": "Toto El Gringo"},
     }
     if username in users and password == users[username]["password"]:
@@ -83,7 +83,7 @@ if uploaded_file:
                 "Journal": "VT",
                 "Numéro de pièce": facture,
                 "Numéro de compte": compte_client,
-                "Libellé": f"Vente - {client}",
+                "Libellé": client,
                 "Débit": round(montant_ttc, 2),
                 "Crédit": ""
             })
@@ -92,7 +92,7 @@ if uploaded_file:
                 "Journal": "VT",
                 "Numéro de pièce": facture,
                 "Numéro de compte": compte_vente,
-                "Libellé": f"Vente - {client}",
+                "Libellé": client,
                 "Débit": "",
                 "Crédit": round(montant_ht, 2)
             })
@@ -102,7 +102,7 @@ if uploaded_file:
                     "Journal": "VT",
                     "Numéro de pièce": facture,
                     "Numéro de compte": "445740000",
-                    "Libellé": f"Vente - {client}",
+                    "Libellé": client,
                     "Débit": "",
                     "Crédit": round(montant_tva, 2)
                 })
