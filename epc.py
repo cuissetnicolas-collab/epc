@@ -2,8 +2,51 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
+# ============================================================
+# 🔐 AUTHENTIFICATION (TA VERSION)
+# ============================================================
+
+if "login" not in st.session_state:
+    st.session_state["login"] = False
+if "page" not in st.session_state:
+    st.session_state["page"] = "Accueil"  # page par défaut
+
+def login(username, password):
+    users = {
+        "aurore": {"password": "12345", "name": "Aurore Demoulin"},
+        "laure.froidefond": {"password": "Laure2019$", "name": "Laure Froidefond"},
+        "Bruno": {"password": "Toto1963$", "name": "Toto El Gringo"}
+    }
+    if username in users and password == users[username]["password"]:
+        st.session_state["login"] = True
+        st.session_state["username"] = username
+        st.session_state["name"] = users[username]["name"]
+        st.session_state["page"] = "Accueil"
+        st.success(f"Bienvenue {st.session_state['name']} 👋")
+        st.rerun()
+    else:
+        st.error("❌ Identifiants incorrects")
+
+if not st.session_state["login"]:
+    st.title("🔑 Connexion espace expert-comptable")
+    username_input = st.text_input("Identifiant")
+    password_input = st.text_input("Mot de passe", type="password")
+    if st.button("Connexion"):
+        login(username_input, password_input)
+    st.stop()
+
+# ============================================================
+# 🎯 PAGE PRINCIPALE - Générateur d'écritures de ventes
+# ============================================================
+
 st.set_page_config(page_title="Générateur écritures ventes", page_icon="📘", layout="centered")
 st.title("📘 Générateur d'écritures comptables de ventes")
+st.caption(f"Connecté en tant que **{st.session_state['name']}**")
+
+if st.button("🔓 Déconnexion"):
+    st.session_state["login"] = False
+    st.rerun()
+
 st.write("Charge un fichier Excel **sans en-tête** contenant les colonnes C à J.")
 
 uploaded_file = st.file_uploader("📂 Fichier Excel", type=["xls", "xlsx"])
@@ -13,7 +56,7 @@ if uploaded_file:
     df = pd.read_excel(uploaded_file, header=None, dtype=str)
 
     try:
-        # Colonnes utiles : C, D, E, I, J  → I = HT, J = TTC
+        # Colonnes utiles : C, D, E, I, J
         df = df.iloc[:, [2, 3, 4, 8, 9]]
         df.columns = ["Date", "Facture", "Client", "HT", "TTC"]
     except Exception:
@@ -82,7 +125,6 @@ if uploaded_file:
 
         tva = round(ttc - ht, 2)
         if tva < 0:
-            # Si HT > TTC → inversion détectée → on corrige
             ht, ttc = ttc, ht
             tva = round(ttc - ht, 2)
 
@@ -106,12 +148,11 @@ if uploaded_file:
             "Débit": "", "Crédit": round(ht, 2)
         })
 
-        # Ligne TVA (si présente, toujours positive au crédit)
+        # Ligne TVA (si présente)
         if abs(tva) > 0.01:
             ecritures.append({
                 "Date": date, "Journal": "VT",
-                "Numéro de compte": "445740000",
-                "Libellé": libelle,
+                "Numéro de compte": "445740000", "Libellé": libelle,
                 "Débit": "", "Crédit": round(tva, 2)
             })
 
