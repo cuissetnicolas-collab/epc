@@ -123,11 +123,14 @@ if uploaded_file:
         date = row["Date"]
         piece = row["Facture"]
 
-        # 🔹 Libellé incluant le numéro de facture
-        libelle = f"Facture {piece} - {row['Client']}"
-
+        # 🔹 Libellé : "Facture" ou "Avoir" selon le signe
         if ttc >= 0:
-            # Facture normale
+            libelle = f"Facture {piece} - {row['Client']}"
+        else:
+            libelle = f"Avoir {piece} - {row['Client']}"
+
+        # === Facture normale ===
+        if ttc >= 0:
             ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": compte_cli,
                                "Numéro de pièce": piece, "Libellé": libelle, "Débit": round(ttc,2), "Crédit": ""})
             ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": compte_vte,
@@ -136,7 +139,7 @@ if uploaded_file:
                 ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": "445740000",
                                    "Numéro de pièce": piece, "Libellé": libelle, "Débit": "", "Crédit": round(tva,2)})
         else:
-            # Avoir / facture négative
+            # === Avoir / facture négative ===
             ttc_abs, ht_abs, tva_abs = abs(ttc), abs(ht), abs(tva)
             ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": compte_cli,
                                "Numéro de pièce": piece, "Libellé": libelle, "Débit": "", "Crédit": round(ttc_abs,2)})
