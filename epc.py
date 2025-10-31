@@ -5,6 +5,7 @@ from io import BytesIO
 # ============================================================
 # 🔐 AUTHENTIFICATION
 # ============================================================
+
 if "login" not in st.session_state:
     st.session_state["login"] = False
 if "page" not in st.session_state:
@@ -14,8 +15,7 @@ def login(username, password):
     users = {
         "aurore": {"password": "12345", "name": "Aurore Demoulin"},
         "laure.froidefond": {"password": "Laure2019$", "name": "Laure Froidefond"},
-        "Bruno": {"password": "Toto1963$", "name": "Toto El Gringo"},
-        "Manana": {"password": "193827", "name": "Manana"}
+        "Bruno": {"password": "Toto1963$", "name": "Toto El Gringo"}
     }
     if username in users and password == users[username]["password"]:
         st.session_state["login"] = True
@@ -36,8 +36,9 @@ if not st.session_state["login"]:
     st.stop()
 
 # ============================================================
-# 🎯 PAGE PRINCIPALE
+# 🎯 PAGE PRINCIPALE - Générateur d'écritures de ventes
 # ============================================================
+
 st.set_page_config(page_title="Générateur écritures ventes", page_icon="📘", layout="centered")
 st.title("📘 Générateur d'écritures comptables de ventes")
 st.caption(f"Connecté en tant que **{st.session_state['name']}**")
@@ -51,17 +52,17 @@ st.write("Charge un fichier Excel **sans en-tête** contenant les colonnes C à 
 uploaded_file = st.file_uploader("📂 Fichier Excel", type=["xls", "xlsx"])
 
 if uploaded_file:
+    # Lecture brute sans en-tête
     df = pd.read_excel(uploaded_file, header=None, dtype=str)
-    
+
     try:
-        # Colonnes utiles : C, D, E, I, J
-        df = df.iloc[:, [2, 3, 4, 8, 9]]
+        df = df.iloc[:, [2, 3, 4, 8, 9]]  # colonnes C, D, E, I, J
         df.columns = ["Date", "Facture", "Client", "HT", "TTC"]
     except Exception:
         st.error("❌ Fichier non conforme : il doit contenir au moins 10 colonnes.")
         st.stop()
-    
-    # Nettoyage montants
+
+    # === Nettoyage montants ===
     def clean_amount(x):
         if pd.isna(x):
             return 0.0
@@ -70,19 +71,23 @@ if uploaded_file:
             return float(x)
         except ValueError:
             return 0.0
-    
+
     df["HT"] = df["HT"].apply(clean_amount)
     df["TTC"] = df["TTC"].apply(clean_amount)
-    
-    # Nettoyage dates
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.strftime("%d/%m/%Y").fillna("")
-    
+
+    # === Nettoyage dates ===
+    df["Date"] = (
+        pd.to_datetime(df["Date"], errors="coerce")
+        .dt.strftime("%d/%m/%Y")
+        .fillna("")
+    )
+
     # === Fonctions utilitaires ===
     def compte_client(nom):
         nom = str(nom).strip().upper()
         lettre = nom[0] if nom and nom[0].isalpha() else "X"
         return f"4110{lettre}0000"
-    
+
     def taux_tva(ht, ttc):
         if ht == 0:
             return 0
@@ -97,7 +102,7 @@ if uploaded_file:
             return 0
         else:
             return "multi"
-    
+
     def compte_vente(taux):
         comptes = {
             5.5: "704000000",
@@ -107,7 +112,7 @@ if uploaded_file:
             "multi": "704300000"
         }
         return comptes[taux]
-    
+
     # === Génération des écritures ===
     ecritures = []
     desequilibres = []
@@ -116,61 +121,78 @@ if uploaded_file:
         ht, ttc = row["HT"], row["TTC"]
         if ht == 0 and ttc == 0:
             continue
-        
+
         tva = round(ttc - ht, 2)
-        taux = taux_tva(ht, ttc)
+        taux = taux_tva(abs(ht), abs(ttc))
         compte_vte = compte_vente(taux)
         compte_cli = compte_client(row["Client"])
         date = row["Date"]
-        piece = row["Facture"]
-        libelle = row["Client"]
 
-        if ttc >= 0:
-            # Facture normale
-            ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": compte_cli,
-                               "Numéro de pièce": piece, "Libellé": libelle, "Débit": round(ttc,2), "Crédit": ""})
-            ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": compte_vte,
-                               "Numéro de pièce": piece, "Libellé": libelle, "Débit": "", "Crédit": round(ht,2)})
-            if abs(tva) > 0.01:
-                ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": "445740000",
-                                   "Numéro de pièce": piece, "Libellé": libelle, "Débit": "", "Crédit": round(tva,2)})
-        else:
-            # Avoir / facture négative
-            ttc_abs, ht_abs, tva_abs = abs(ttc), abs(ht), abs(tva)
-            ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": compte_cli,
-                               "Numéro de pièce": piece, "Libellé": libelle, "Débit": "", "Crédit": round(ttc_abs,2)})
-            ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": compte_vte,
-                               "Numéro de pièce": piece, "Libellé": libelle, "Débit": round(ht_abs,2), "Crédit": ""})
-            if abs(tva) > 0.01:
-                ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": "445740000",
-                                   "Numéro de pièce": piece, "Libellé": libelle, "Débit": round(tva_abs,2), "Crédit": ""})
-        
+        # Si montant négatif → avoir
+        signe = -1 if ttc < 0 or ht < 0 else 1
+        type_piece = "Avoir" if signe < 0 else "Facture"
+        libelle = f"{type_piece} {row['Facture']} - {row['Client']}"
+
+        # Ligne client (TTC)
+        ecritures.append({
+            "Date": date, "Journal": "VT",
+            "Numéro de compte": compte_cli,
+            "Numéro de pièce": row["Facture"],
+            "Libellé": libelle,
+            "Débit": round(ttc, 2) if signe > 0 else "",
+            "Crédit": abs(round(ttc, 2)) if signe < 0 else ""
+        })
+
+        # Ligne vente (HT)
+        ecritures.append({
+            "Date": date, "Journal": "VT",
+            "Numéro de compte": compte_vte,
+            "Numéro de pièce": row["Facture"],
+            "Libellé": libelle,
+            "Débit": abs(round(ht, 2)) if signe < 0 else "",
+            "Crédit": round(ht, 2) if signe > 0 else ""
+        })
+
+        # Ligne TVA (si présente)
+        if abs(tva) > 0.01:
+            ecritures.append({
+                "Date": date, "Journal": "VT",
+                "Numéro de compte": "445740000",
+                "Numéro de pièce": row["Facture"],
+                "Libellé": libelle,
+                "Débit": abs(round(tva, 2)) if signe < 0 else "",
+                "Crédit": round(tva, 2) if signe > 0 else ""
+            })
+
         # Vérification équilibre
-        if abs(ttc - (ht + tva)) > 0.01:
-            desequilibres.append(piece)
+        if abs(round(ttc - (ht + tva), 2)) > 0.01:
+            desequilibres.append(row["Facture"])
 
-    df_out = pd.DataFrame(ecritures, columns=["Date", "Journal", "Numéro de compte", "Numéro de pièce", "Libellé", "Débit", "Crédit"])
-    
+    df_out = pd.DataFrame(ecritures, columns=[
+        "Date", "Journal", "Numéro de compte", "Numéro de pièce",
+        "Libellé", "Débit", "Crédit"
+    ])
+
     # === Résumé ===
     st.success(f"✅ {len(df)} lignes sources → {len(df_out)} écritures générées.")
     if desequilibres:
-        st.warning(f"⚠️ Factures déséquilibrées : {', '.join(map(str, desequilibres[:5]))}")
-    
+        st.warning(f"⚠️ {len(desequilibres)} factures déséquilibrées : {', '.join(map(str, desequilibres[:5]))}")
+
     # === Aperçu ===
     st.subheader("Aperçu des premières écritures")
     st.dataframe(df_out.head(10))
-    
+
     # === Totaux de contrôle ===
     total_debit = df_out["Débit"].apply(pd.to_numeric, errors="coerce").sum()
     total_credit = df_out["Crédit"].apply(pd.to_numeric, errors="coerce").sum()
     st.info(f"**Total Débit :** {total_debit:,.2f} € | **Total Crédit :** {total_credit:,.2f} € | **Écart :** {total_debit - total_credit:,.2f} €")
-    
+
     # === Export Excel ===
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl", date_format="DD/MM/YYYY") as writer:
         df_out.to_excel(writer, index=False, sheet_name="Écritures")
     output.seek(0)
-    
+
     st.download_button(
         "💾 Télécharger les écritures générées",
         data=output,
