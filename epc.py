@@ -74,8 +74,8 @@ if uploaded_file:
         except ValueError:
             return 0.0
 
-    df["HT_ligne"] = df["Total HT"].apply(clean_amount)
-    df["TTC_ligne"] = df["Total TTC"].apply(clean_amount)
+    df["HT_total"] = df["Total HT"].apply(clean_amount)
+    df["TTC_total"] = df["Total TTC"].apply(clean_amount)
 
     # Nettoyage dates
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.strftime("%d/%m/%Y").fillna("")
@@ -105,15 +105,17 @@ if uploaded_file:
         comptes = {5.5: "704000000", 10: "704100000", 20: "704200000", 0: "704500000", "multi": "704300000"}
         return comptes[taux]
 
-    # === Génération des écritures par facture ===
+    # === Génération des écritures par facture (1 seule ligne par facture) ===
     ecritures = []
     desequilibres = []
 
     for num_facture, group in df.groupby("N° Facture"):
-        ht_total = group["HT_ligne"].sum()
-        ttc_total = group["TTC_ligne"].sum()
-        date = group["Date"].iloc[0]
-        client = group["Nom Facture"].iloc[0]
+        # On prend la première ligne, car Total HT et TTC sont déjà les totaux de la facture
+        ligne = group.iloc[0]
+        ht_total = ligne["HT_total"]
+        ttc_total = ligne["TTC_total"]
+        date = ligne["Date"]
+        client = ligne["Nom Facture"]
         piece = num_facture
 
         tva = round(ttc_total - ht_total, 2)
