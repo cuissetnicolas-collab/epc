@@ -25,10 +25,11 @@ def login(username, password):
         st.session_state["name"] = USERS[username]["name"]
         st.session_state["page"] = "Accueil"
         st.success(f"Bienvenue {st.session_state['name']} 👋")
-        st.experimental_rerun()
+        st.stop()  # Stoppe pour que Streamlit recharge la page
     else:
         st.error("❌ Identifiants incorrects")
 
+# Affichage formulaire de connexion
 if not st.session_state["login"]:
     st.title("🔑 Connexion espace expert-comptable")
     username_input = st.text_input("Identifiant")
@@ -47,9 +48,12 @@ st.caption(f"Connecté en tant que **{st.session_state['name']}**")
 
 if st.button("🔓 Déconnexion"):
     st.session_state["login"] = False
-    st.experimental_rerun()
+    st.stop()  # Recharge la page pour revenir à la connexion
 
-st.write("Charge un fichier Excel avec les colonnes : `N° Facture`, `Date`, `Nom Facture`, `Total HT`, `Taux de tva`, `Total TTC`")
+st.write(
+    "Charge un fichier Excel avec les colonnes : "
+    "`N° Facture`, `Date`, `Nom Facture`, `Total HT`, `Taux de tva`, `Total TTC`"
+)
 uploaded_file = st.file_uploader("📂 Fichier Excel", type=["xls", "xlsx"])
 
 if uploaded_file:
@@ -61,7 +65,7 @@ if uploaded_file:
         st.error(f"❌ Fichier non conforme : il doit contenir les colonnes {expected_cols}")
         st.stop()
 
-    # --- Nettoyage montants ---
+    # --- Nettoyage des montants ---
     def clean_amount(x):
         if pd.isna(x):
             return 0.0
