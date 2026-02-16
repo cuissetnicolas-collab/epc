@@ -51,17 +51,17 @@ if st.button("🔓 Déconnexion"):
 
 st.write(
     "Charge un fichier Excel avec les colonnes : "
-    "`N° Facture`, `Date`, `Nom Facture`, `Total HT`, `Taux de tva`, `Total TTC`"
+    "`N° Facture`, `Date`, `Nom Facture`, `Total HT`, `Total TTC`"
 )
 uploaded_file = st.file_uploader("📂 Fichier Excel", type=["xls", "xlsx"])
 
 if uploaded_file:
     df = pd.read_excel(uploaded_file, dtype=str)
 
-    # Vérification des colonnes nécessaires
-    expected_cols = ["N° Facture", "Date", "Nom Facture", "Total HT", "Taux de tva", "Total TTC"]
-    if not all(col in df.columns for col in expected_cols):
-        st.error(f"❌ Fichier non conforme : il doit contenir les colonnes {expected_cols}")
+    # Colonnes nécessaires
+    required_cols = ["N° Facture", "Date", "Nom Facture", "Total HT", "Total TTC"]
+    if not all(col in df.columns for col in required_cols):
+        st.error(f"❌ Fichier non conforme : il doit contenir les colonnes {required_cols}")
         st.stop()
 
     # Nettoyage montants
@@ -74,8 +74,8 @@ if uploaded_file:
         except ValueError:
             return 0.0
 
-    df["Total HT"] = df["Total HT"].apply(clean_amount)
-    df["Total TTC"] = df["Total TTC"].apply(clean_amount)
+    df["HT_ligne"] = df["Total HT"].apply(clean_amount)  # <-- colonne Total HT utilisée
+    df["TTC_ligne"] = df["Total TTC"].apply(clean_amount)
 
     # Nettoyage dates
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.strftime("%d/%m/%Y").fillna("")
@@ -105,14 +105,13 @@ if uploaded_file:
         comptes = {5.5: "704000000", 10: "704100000", 20: "704200000", 0: "704500000", "multi": "704300000"}
         return comptes[taux]
 
-    # === Génération des écritures ===
+    # === Génération des écritures par facture ===
     ecritures = []
     desequilibres = []
 
-    # On parcourt chaque facture
     for num_facture, group in df.groupby("N° Facture"):
-        ht_total = group["Total HT"].sum()
-        ttc_total = group["Total TTC"].sum()
+        ht_total = group["HT_ligne"].sum()
+        ttc_total = group["TTC_ligne"].sum()
         date = group["Date"].iloc[0]
         client = group["Nom Facture"].iloc[0]
         piece = num_facture
@@ -140,7 +139,6 @@ if uploaded_file:
                 ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": "445740000",
                                   "Numéro de pièce": piece, "Libellé": libelle, "Débit": round(tva_abs,2), "Crédit": ""})
 
-        # Vérification équilibre
         if abs(ttc_total - (ht_total + tva)) > 0.01:
             desequilibres.append(piece)
 
@@ -148,6 +146,7 @@ if uploaded_file:
     df_out = pd.DataFrame(ecritures, columns=["Date", "Journal", "Numéro de compte",
                                               "Numéro de pièce", "Libellé", "Débit", "Crédit"])
 
+    # Résumé
     st.success(f"✅ {len(df['N° Facture'].unique())} factures → {len(df_out)} écritures générées.")
     if desequilibres:
         st.warning(f"⚠️ Factures déséquilibrées : {', '.join(map(str, desequilibres[:5]))}")
