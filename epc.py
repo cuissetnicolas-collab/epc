@@ -76,15 +76,9 @@ if uploaded_file:
 
     df["Total HT"] = df["Total HT"].apply(clean_amount)
     df["Total TTC"] = df["Total TTC"].apply(clean_amount)
-    df["Taux de tva"] = df["Taux de tva"].apply(clean_amount)
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.strftime("%d/%m/%Y").fillna("")
 
-    # --- Regroupement par facture ---
-    df_grouped = df.groupby(["N° Facture", "Date", "Nom Facture"], as_index=False).agg({
-        "Total HT": "sum",
-        "Total TTC": "sum",
-        "Taux de tva": "first"  # On prend le premier taux pour la facture (ou tu peux gérer multi-TVA plus tard)
-    })
+    # Nettoyage dates
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.strftime("%d/%m/%Y").fillna("")
 
     # Fonctions utilitaires
     def compte_client(nom):
@@ -92,35 +86,52 @@ if uploaded_file:
         lettre = nom[0] if nom and nom[0].isalpha() else "X"
         return f"4110{lettre}0000"
 
+    def taux_tva(ht, ttc):
+        if ht == 0:
+            return 0
+        taux_calc = round((ttc / ht - 1) * 100, 1)
+        if abs(taux_calc - 20) < 0.6:
+            return 20
+        elif abs(taux_calc - 10) < 0.6:
+            return 10
+        elif abs(taux_calc - 5.5) < 0.4:
+            return 5.5
+        elif abs(ttc - ht) < 0.02:
+            return 0
+        else:
+            return "multi"
+
     def compte_vente(taux):
         comptes = {5.5: "704000000", 10: "704100000", 20: "704200000", 0: "704500000", "multi": "704300000"}
-        return comptes.get(taux, "704300000")
+        return comptes[taux]
 
-    # === Génération des écritures par facture ===
+    # === Génération des écritures ===
     ecritures = []
     desequilibres = []
 
-    for _, row in df_grouped.iterrows():
-        ht, ttc, tva_rate = row["Total HT"], row["Total TTC"], row["Taux de tva"]
-        if ht == 0 and ttc == 0:
-            continue
-        tva = round(ttc - ht, 2)
-        compte_vte = compte_vente(tva_rate)
-        compte_cli = compte_client(row["Nom Facture"])
-        date = row["Date"]
-        piece = row["N° Facture"]
-        libelle = f"{'Facture' if ttc >=0 else 'Avoir'} {piece} - {row['Nom Facture']}"
+    # On parcourt chaque facture
+    for num_facture, group in df.groupby("N° Facture"):
+        ht_total = group["Total HT"].sum()
+        ttc_total = group["Total TTC"].sum()
+        date = group["Date"].iloc[0]
+        client = group["Nom Facture"].iloc[0]
+        piece = num_facture
+        tva = round(ttc_total - ht_total, 2)
+        taux = taux_tva(ht_total, ttc_total)
+        compte_vte = compte_vente(taux)
+        compte_cli = compte_client(client)
+        libelle = f"{'Facture' if ttc_total >=0 else 'Avoir'} {piece} - {client}"
 
-        if ttc >= 0:
+        if ttc_total >= 0:
             ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": compte_cli,
-                              "Numéro de pièce": piece, "Libellé": libelle, "Débit": round(ttc,2), "Crédit": ""})
+                              "Numéro de pièce": piece, "Libellé": libelle, "Débit": round(ttc_total,2), "Crédit": ""})
             ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": compte_vte,
-                              "Numéro de pièce": piece, "Libellé": libelle, "Débit": "", "Crédit": round(ht,2)})
+                              "Numéro de pièce": piece, "Libellé": libelle, "Débit": "", "Crédit": round(ht_total,2)})
             if abs(tva) > 0.01:
                 ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": "445740000",
                                   "Numéro de pièce": piece, "Libellé": libelle, "Débit": "", "Crédit": round(tva,2)})
         else:
-            ttc_abs, ht_abs, tva_abs = abs(ttc), abs(ht), abs(tva)
+            ttc_abs, ht_abs, tva_abs = abs(ttc_total), abs(ht_total), abs(tva)
             ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": compte_cli,
                               "Numéro de pièce": piece, "Libellé": libelle, "Débit": "", "Crédit": round(ttc_abs,2)})
             ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": compte_vte,
@@ -129,21 +140,21 @@ if uploaded_file:
                 ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": "445740000",
                                   "Numéro de pièce": piece, "Libellé": libelle, "Débit": round(tva_abs,2), "Crédit": ""})
 
-        if abs(ttc - (ht + tva)) > 0.01:
+        # Vérification équilibre
+        if abs(ttc_total - (ht_total + tva)) > 0.01:
             desequilibres.append(piece)
 
+    # Création DataFrame final
     df_out = pd.DataFrame(ecritures, columns=["Date", "Journal", "Numéro de compte",
                                               "Numéro de pièce", "Libellé", "Débit", "Crédit"])
 
-    # === Résumé ===
-    st.success(f"✅ {len(df_grouped)} factures → {len(df_out)} écritures générées.")
+    st.success(f"✅ {len(df['N° Facture'].unique())} factures → {len(df_out)} écritures générées.")
     if desequilibres:
         st.warning(f"⚠️ Factures déséquilibrées : {', '.join(map(str, desequilibres[:5]))}")
 
     st.subheader("Aperçu des premières écritures")
     st.dataframe(df_out.head(10))
 
-    # Totaux
     total_debit = df_out["Débit"].apply(pd.to_numeric, errors="coerce").sum()
     total_credit = df_out["Crédit"].apply(pd.to_numeric, errors="coerce").sum()
     st.info(f"**Total Débit :** {total_debit:,.2f} € | **Total Crédit :** {total_credit:,.2f} € | **Écart :** {total_debit - total_credit:,.2f} €")
