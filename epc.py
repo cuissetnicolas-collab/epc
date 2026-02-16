@@ -74,7 +74,7 @@ if uploaded_file:
         except ValueError:
             return 0.0
 
-    df["HT_ligne"] = df["Total HT"].apply(clean_amount)  # <-- colonne Total HT utilisée
+    df["HT_ligne"] = df["Total HT"].apply(clean_amount)
     df["TTC_ligne"] = df["Total TTC"].apply(clean_amount)
 
     # Nettoyage dates
@@ -115,6 +115,7 @@ if uploaded_file:
         date = group["Date"].iloc[0]
         client = group["Nom Facture"].iloc[0]
         piece = num_facture
+
         tva = round(ttc_total - ht_total, 2)
         taux = taux_tva(ht_total, ttc_total)
         compte_vte = compte_vente(taux)
