@@ -9,10 +9,6 @@ from io import BytesIO
 if "login" not in st.session_state:
     st.session_state["login"] = False
 
-if "page" not in st.session_state:
-    st.session_state["page"] = "Accueil"
-
-
 def login(username, password):
     users = {
         "aurore": {"password": "12345", "name": "Aurore Demoulin"},
@@ -23,22 +19,17 @@ def login(username, password):
 
     if username in users and password == users[username]["password"]:
         st.session_state["login"] = True
-        st.session_state["username"] = username
         st.session_state["name"] = users[username]["name"]
-        st.success(f"Bienvenue {st.session_state['name']} 👋")
         st.rerun()
     else:
         st.error("❌ Identifiants incorrects")
 
-
 if not st.session_state["login"]:
     st.title("🔑 Connexion espace expert-comptable")
-    username_input = st.text_input("Identifiant")
-    password_input = st.text_input("Mot de passe", type="password")
-
+    u = st.text_input("Identifiant")
+    p = st.text_input("Mot de passe", type="password")
     if st.button("Connexion"):
-        login(username_input, password_input)
-
+        login(u, p)
     st.stop()
 
 # ============================================================
@@ -64,7 +55,6 @@ def compte_client(nom):
     lettre = nom[0] if nom and nom[0].isalpha() else "X"
     return f"4110{lettre}0000"
 
-
 def compte_vente(taux):
     comptes = {
         5.5: "704000000",
@@ -73,7 +63,6 @@ def compte_vente(taux):
         0.0: "704500000",
     }
     return comptes.get(float(taux), "704300000")
-
 
 # ============================================================
 # 🚀 TRAITEMENT
@@ -84,18 +73,19 @@ if uploaded_file:
     df = pd.read_excel(uploaded_file)
     df.columns = df.columns.str.strip()
 
-    # Renommage standardisé
     df = df.rename(columns={
         "N° Facture": "Facture",
         "Nom Facture": "Client",
         "Taux de tva": "Taux TVA",
-        "Total HT": "HT",
-        "Total TTC": "TTC"
+        "Total HT": "HT_TOTAL",
+        "Total TTC": "TTC",
+        "Total HT d'origine sur quantité unitaire": "HT_LIGNE"
     })
 
     # Nettoyage
-    df["HT"] = pd.to_numeric(df["HT"], errors="coerce").fillna(0)
+    df["HT_TOTAL"] = pd.to_numeric(df["HT_TOTAL"], errors="coerce").fillna(0)
     df["TTC"] = pd.to_numeric(df["TTC"], errors="coerce").fillna(0)
+    df["HT_LIGNE"] = pd.to_numeric(df["HT_LIGNE"], errors="coerce").fillna(0)
     df["Taux TVA"] = pd.to_numeric(df["Taux TVA"], errors="coerce").fillna(0)
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.strftime("%d/%m/%Y")
 
@@ -113,20 +103,18 @@ if uploaded_file:
         compte_cli = compte_client(client)
 
         total_ttc = data["TTC"].max()
-        total_ht = data["HT"].max()
-
-        taux_uniques = data["Taux TVA"].nunique()
+        total_ht_facture = data["HT_TOTAL"].max()
+        nb_taux = data["Taux TVA"].nunique()
 
         # =====================================================
         # ✅ MONO TAUX
         # =====================================================
-        if taux_uniques == 1:
+        if nb_taux == 1:
 
             taux = data["Taux TVA"].iloc[0]
-            total_tva = round(total_ttc - total_ht, 2)
+            total_tva = round(total_ttc - total_ht_facture, 2)
             compte_vte = compte_vente(taux)
 
-            # Client
             ecritures.append({
                 "Date": date,
                 "Journal": "VT",
@@ -137,7 +125,6 @@ if uploaded_file:
                 "Crédit": ""
             })
 
-            # Vente
             ecritures.append({
                 "Date": date,
                 "Journal": "VT",
@@ -145,10 +132,9 @@ if uploaded_file:
                 "Numéro de pièce": piece,
                 "Libellé": f"Facture {piece} - {client}",
                 "Débit": "",
-                "Crédit": round(total_ht,2)
+                "Crédit": round(total_ht_facture,2)
             })
 
-            # TVA
             if abs(total_tva) > 0.01:
                 ecritures.append({
                     "Date": date,
@@ -167,7 +153,6 @@ if uploaded_file:
 
             multi_taux_factures.append(facture)
 
-            # Ligne client unique
             ecritures.append({
                 "Date": date,
                 "Journal": "VT",
@@ -185,7 +170,7 @@ if uploaded_file:
 
             for taux, lignes in taux_group:
 
-                ht_part = lignes["HT"].sum()
+                ht_part = lignes["HT_LIGNE"].sum()
                 tva_part = round(ht_part * taux / 100, 2)
 
                 total_ht_multi += ht_part
@@ -193,7 +178,6 @@ if uploaded_file:
 
                 compte_vte = compte_vente(taux)
 
-                # Vente
                 ecritures.append({
                     "Date": date,
                     "Journal": "VT",
@@ -204,7 +188,6 @@ if uploaded_file:
                     "Crédit": round(ht_part,2)
                 })
 
-                # TVA
                 ecritures.append({
                     "Date": date,
                     "Journal": "VT",
@@ -215,7 +198,6 @@ if uploaded_file:
                     "Crédit": round(tva_part,2)
                 })
 
-            # Contrôle équilibre
             if abs(total_ttc - (total_ht_multi + total_tva_multi)) > 0.02:
                 desequilibres.append(facture)
 
@@ -232,21 +214,17 @@ if uploaded_file:
         st.write(multi_taux_factures)
 
     if desequilibres:
-        st.error("❌ Factures déséquilibrées :")
+        st.error("❌ Factures déséquilibrées")
         st.write(desequilibres)
-
-    st.subheader("Aperçu écritures")
-    st.dataframe(df_out.head(20))
 
     total_debit = pd.to_numeric(df_out["Débit"], errors="coerce").sum()
     total_credit = pd.to_numeric(df_out["Crédit"], errors="coerce").sum()
 
-    st.info(f"Total Débit : {total_debit:.2f} € | Total Crédit : {total_credit:.2f} €")
+    st.info(f"Total Débit : {total_debit:.2f} € | Total Crédit : {total_credit:.2f} € | Écart : {(total_debit-total_credit):.2f} €")
 
-    # =====================================================
-    # 💾 EXPORT EXCEL
-    # =====================================================
+    st.dataframe(df_out.head(20))
 
+    # Export Excel
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df_out.to_excel(writer, index=False, sheet_name="Écritures")
