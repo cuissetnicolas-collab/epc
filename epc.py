@@ -8,235 +8,153 @@ from io import BytesIO
 
 if "login" not in st.session_state:
     st.session_state["login"] = False
+if "page" not in st.session_state:
+    st.session_state["page"] = "Accueil"
+
+USERS = {
+    "aurore": {"password": "12345", "name": "Aurore Demoulin"},
+    "laure.froidefond": {"password": "Laure2019$", "name": "Laure Froidefond"},
+    "Bruno": {"password": "Toto1963$", "name": "Toto El Gringo"},
+    "Manana": {"password": "193827", "name": "Manana"}
+}
 
 def login(username, password):
-    users = {
-        "aurore": {"password": "12345", "name": "Aurore Demoulin"},
-        "laure.froidefond": {"password": "Laure2019$", "name": "Laure Froidefond"},
-        "Bruno": {"password": "Toto1963$", "name": "Toto El Gringo"},
-        "Manana": {"password": "193827", "name": "Manana"},
-    }
-
-    if username in users and password == users[username]["password"]:
+    if username in USERS and password == USERS[username]["password"]:
         st.session_state["login"] = True
-        st.session_state["name"] = users[username]["name"]
-        st.rerun()
+        st.session_state["username"] = username
+        st.session_state["name"] = USERS[username]["name"]
+        st.session_state["page"] = "Accueil"
+        st.success(f"Bienvenue {st.session_state['name']} 👋")
+        st.experimental_rerun()
     else:
         st.error("❌ Identifiants incorrects")
 
 if not st.session_state["login"]:
     st.title("🔑 Connexion espace expert-comptable")
-    u = st.text_input("Identifiant")
-    p = st.text_input("Mot de passe", type="password")
+    username_input = st.text_input("Identifiant")
+    password_input = st.text_input("Mot de passe", type="password")
     if st.button("Connexion"):
-        login(u, p)
+        login(username_input, password_input)
     st.stop()
 
 # ============================================================
 # 🎯 PAGE PRINCIPALE
 # ============================================================
 
-st.set_page_config(page_title="Générateur écritures ventes", page_icon="📘")
+st.set_page_config(page_title="Générateur écritures ventes", page_icon="📘", layout="centered")
 st.title("📘 Générateur d'écritures comptables de ventes")
 st.caption(f"Connecté en tant que **{st.session_state['name']}**")
 
 if st.button("🔓 Déconnexion"):
     st.session_state["login"] = False
-    st.rerun()
+    st.experimental_rerun()
 
-uploaded_file = st.file_uploader("📂 Charge le fichier export ventes", type=["xlsx", "xls"])
-
-# ============================================================
-# 🛠 FONCTIONS COMPTABLES
-# ============================================================
-
-def compte_client(nom):
-    nom = str(nom).strip().upper()
-    lettre = nom[0] if nom and nom[0].isalpha() else "X"
-    return f"4110{lettre}0000"
-
-def compte_vente(taux):
-    comptes = {
-        5.5: "704000000",
-        10.0: "704100000",
-        20.0: "704200000",
-        0.0: "704500000",
-    }
-    return comptes.get(float(taux), "704300000")
-
-# ============================================================
-# 🚀 TRAITEMENT
-# ============================================================
+st.write("Charge un fichier Excel avec les colonnes : `N° Facture`, `Date`, `Nom Facture`, `Total HT`, `Taux de tva`, `Total TTC`")
+uploaded_file = st.file_uploader("📂 Fichier Excel", type=["xls", "xlsx"])
 
 if uploaded_file:
+    df = pd.read_excel(uploaded_file, dtype=str)
 
-    df = pd.read_excel(uploaded_file)
-    df.columns = df.columns.str.strip()
+    # Vérification des colonnes nécessaires
+    expected_cols = ["N° Facture", "Date", "Nom Facture", "Total HT", "Taux de tva", "Total TTC"]
+    if not all(col in df.columns for col in expected_cols):
+        st.error(f"❌ Fichier non conforme : il doit contenir les colonnes {expected_cols}")
+        st.stop()
 
-    df = df.rename(columns={
-        "N° Facture": "Facture",
-        "Nom Facture": "Client",
-        "Taux de tva": "Taux TVA",
-        "Total HT": "HT_TOTAL",
-        "Total TTC": "TTC",
-        "Total HT d'origine sur quantité unitaire": "HT_LIGNE"
-    })
+    # --- Nettoyage montants ---
+    def clean_amount(x):
+        if pd.isna(x):
+            return 0.0
+        x = str(x).replace(",", ".").replace("€", "").replace(" ", "").strip()
+        try:
+            return float(x)
+        except ValueError:
+            return 0.0
 
-    # Nettoyage
-    df["HT_TOTAL"] = pd.to_numeric(df["HT_TOTAL"], errors="coerce").fillna(0)
-    df["TTC"] = pd.to_numeric(df["TTC"], errors="coerce").fillna(0)
-    df["HT_LIGNE"] = pd.to_numeric(df["HT_LIGNE"], errors="coerce").fillna(0)
-    df["Taux TVA"] = pd.to_numeric(df["Taux TVA"], errors="coerce").fillna(0)
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.strftime("%d/%m/%Y")
+    df["Total HT"] = df["Total HT"].apply(clean_amount)
+    df["Total TTC"] = df["Total TTC"].apply(clean_amount)
+    df["Taux de tva"] = df["Taux de tva"].apply(clean_amount)
 
+    # --- Nettoyage dates ---
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.strftime("%d/%m/%Y").fillna("")
+
+    # === Fonctions utilitaires ===
+    def compte_client(nom):
+        nom = str(nom).strip().upper()
+        lettre = nom[0] if nom and nom[0].isalpha() else "X"
+        return f"4110{lettre}0000"
+
+    def compte_vente(taux):
+        comptes = {5.5: "704000000", 10: "704100000", 20: "704200000", 0: "704500000", "multi": "704300000"}
+        return comptes.get(taux, "704300000")
+
+    # === Génération des écritures ===
     ecritures = []
-    multi_taux_factures = []
     desequilibres = []
 
-    grouped = df.groupby("Facture")
+    for _, row in df.iterrows():
+        ht, ttc, tva_rate = row["Total HT"], row["Total TTC"], row["Taux de tva"]
+        if ht == 0 and ttc == 0:
+            continue
+        tva = round(ttc - ht, 2)
+        compte_vte = compte_vente(tva_rate)
+        compte_cli = compte_client(row["Nom Facture"])
+        date = row["Date"]
+        piece = row["N° Facture"]
+        libelle = f"{'Facture' if ttc >=0 else 'Avoir'} {piece} - {row['Nom Facture']}"
 
-    for facture, data in grouped:
-
-        date = data["Date"].iloc[0]
-        client = data["Client"].iloc[0]
-        piece = facture
-        compte_cli = compte_client(client)
-
-        total_ttc = data["TTC"].max()
-        total_ht_facture = data["HT_TOTAL"].max()
-        nb_taux = data["Taux TVA"].nunique()
-
-        # =====================================================
-        # ✅ MONO TAUX
-        # =====================================================
-        if nb_taux == 1:
-
-            taux = data["Taux TVA"].iloc[0]
-            total_tva = round(total_ttc - total_ht_facture, 2)
-            compte_vte = compte_vente(taux)
-
-            ecritures.append({
-                "Date": date,
-                "Journal": "VT",
-                "Numéro de compte": compte_cli,
-                "Numéro de pièce": piece,
-                "Libellé": f"Facture {piece} - {client}",
-                "Débit": round(total_ttc,2),
-                "Crédit": ""
-            })
-
-            ecritures.append({
-                "Date": date,
-                "Journal": "VT",
-                "Numéro de compte": compte_vte,
-                "Numéro de pièce": piece,
-                "Libellé": f"Facture {piece} - {client}",
-                "Débit": "",
-                "Crédit": round(total_ht_facture,2)
-            })
-
-            if abs(total_tva) > 0.01:
-                ecritures.append({
-                    "Date": date,
-                    "Journal": "VT",
-                    "Numéro de compte": "445740000",
-                    "Numéro de pièce": piece,
-                    "Libellé": f"Facture {piece} - {client}",
-                    "Débit": "",
-                    "Crédit": round(total_tva,2)
-                })
-
-        # =====================================================
-        # ⚠️ MULTI TAUX
-        # =====================================================
+        if ttc >= 0:
+            # Facture positive
+            ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": compte_cli,
+                              "Numéro de pièce": piece, "Libellé": libelle, "Débit": round(ttc,2), "Crédit": ""})
+            ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": compte_vte,
+                              "Numéro de pièce": piece, "Libellé": libelle, "Débit": "", "Crédit": round(ht,2)})
+            if abs(tva) > 0.01:
+                ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": "445740000",
+                                  "Numéro de pièce": piece, "Libellé": libelle, "Débit": "", "Crédit": round(tva,2)})
         else:
+            # Facture négative / avoir
+            ttc_abs, ht_abs, tva_abs = abs(ttc), abs(ht), abs(tva)
+            ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": compte_cli,
+                              "Numéro de pièce": piece, "Libellé": libelle, "Débit": "", "Crédit": round(ttc_abs,2)})
+            ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": compte_vte,
+                              "Numéro de pièce": piece, "Libellé": libelle, "Débit": round(ht_abs,2), "Crédit": ""})
+            if abs(tva) > 0.01:
+                ecritures.append({"Date": date, "Journal": "VT", "Numéro de compte": "445740000",
+                                  "Numéro de pièce": piece, "Libellé": libelle, "Débit": round(tva_abs,2), "Crédit": ""})
 
-            multi_taux_factures.append(facture)
+        if abs(ttc - (ht + tva)) > 0.01:
+            desequilibres.append(piece)
 
-            ecritures.append({
-                "Date": date,
-                "Journal": "VT",
-                "Numéro de compte": compte_cli,
-                "Numéro de pièce": piece,
-                "Libellé": f"Facture {piece} - {client}",
-                "Débit": round(total_ttc,2),
-                "Crédit": ""
-            })
+    df_out = pd.DataFrame(ecritures, columns=["Date", "Journal", "Numéro de compte",
+                                              "Numéro de pièce", "Libellé", "Débit", "Crédit"])
 
-            taux_group = data.groupby("Taux TVA")
-
-            total_ht_multi = 0
-            total_tva_multi = 0
-
-            for taux, lignes in taux_group:
-
-                ht_part = lignes["HT_LIGNE"].sum()
-                tva_part = round(ht_part * taux / 100, 2)
-
-                total_ht_multi += ht_part
-                total_tva_multi += tva_part
-
-                compte_vte = compte_vente(taux)
-
-                ecritures.append({
-                    "Date": date,
-                    "Journal": "VT",
-                    "Numéro de compte": compte_vte,
-                    "Numéro de pièce": piece,
-                    "Libellé": f"Facture {piece} - {client}",
-                    "Débit": "",
-                    "Crédit": round(ht_part,2)
-                })
-
-                ecritures.append({
-                    "Date": date,
-                    "Journal": "VT",
-                    "Numéro de compte": "445740000",
-                    "Numéro de pièce": piece,
-                    "Libellé": f"Facture {piece} - {client}",
-                    "Débit": "",
-                    "Crédit": round(tva_part,2)
-                })
-
-            if abs(total_ttc - (total_ht_multi + total_tva_multi)) > 0.02:
-                desequilibres.append(facture)
-
-    df_out = pd.DataFrame(ecritures)
-
-    # =====================================================
-    # 📊 AFFICHAGE
-    # =====================================================
-
-    st.success(f"✅ {len(grouped)} factures traitées")
-
-    if multi_taux_factures:
-        st.warning(f"⚠️ {len(multi_taux_factures)} factures multi-taux détectées")
-        st.write(multi_taux_factures)
-
+    # === Résumé ===
+    st.success(f"✅ {len(df)} lignes sources → {len(df_out)} écritures générées.")
     if desequilibres:
-        st.error("❌ Factures déséquilibrées")
-        st.write(desequilibres)
+        st.warning(f"⚠️ Factures déséquilibrées : {', '.join(map(str, desequilibres[:5]))}")
 
-    total_debit = pd.to_numeric(df_out["Débit"], errors="coerce").sum()
-    total_credit = pd.to_numeric(df_out["Crédit"], errors="coerce").sum()
+    # === Aperçu ===
+    st.subheader("Aperçu des premières écritures")
+    st.dataframe(df_out.head(10))
 
-    st.info(f"Total Débit : {total_debit:.2f} € | Total Crédit : {total_credit:.2f} € | Écart : {(total_debit-total_credit):.2f} €")
+    # === Totaux de contrôle ===
+    total_debit = df_out["Débit"].apply(pd.to_numeric, errors="coerce").sum()
+    total_credit = df_out["Crédit"].apply(pd.to_numeric, errors="coerce").sum()
+    st.info(f"**Total Débit :** {total_debit:,.2f} € | **Total Crédit :** {total_credit:,.2f} € | **Écart :** {total_debit - total_credit:,.2f} €")
 
-    st.dataframe(df_out.head(20))
-
-    # Export Excel
+    # === Export Excel ===
     output = BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+    with pd.ExcelWriter(output, engine="openpyxl", date_format="DD/MM/YYYY") as writer:
         df_out.to_excel(writer, index=False, sheet_name="Écritures")
-
     output.seek(0)
 
     st.download_button(
-        "💾 Télécharger les écritures",
+        "💾 Télécharger les écritures générées",
         data=output,
         file_name="ecritures_ventes.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
 else:
-    st.info("⬆️ Charge ton fichier pour commencer.")
+    st.info("⬆️ Charge ton fichier Excel pour commencer.")
